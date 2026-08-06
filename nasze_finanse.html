@@ -687,21 +687,38 @@ const STORAGE_KEY = 'nasze-finanse-data';
 let saveTimer=null;
 function scheduleSave(){
   clearTimeout(saveTimer);
-  saveTimer=setTimeout(async ()=>{
-    try{ await window.storage.set(STORAGE_KEY, JSON.stringify(state), false); }
-    catch(e){ console.error('Storage error', e); }
+  saveTimer=setTimeout(()=>{
+    const json = JSON.stringify(state);
+    try{
+      localStorage.setItem(STORAGE_KEY, json);
+    }catch(e){
+      console.error('localStorage error', e);
+      try{ window.storage && window.storage.set(STORAGE_KEY, json, false); }catch(e2){}
+    }
   }, 400);
 }
 async function loadState(){
   try{
-    const res = await window.storage.get(STORAGE_KEY, false);
-    if(res && res.value){
-      state = JSON.parse(res.value);
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(raw){
+      state = JSON.parse(raw);
       if(!state.history) state.history = JSON.parse(JSON.stringify(defaultState.history));
       migrateAndDedupe();
       return;
     }
-  }catch(e){ /* not found or error -> use default */ }
+  }catch(e){ console.error('localStorage read error', e); }
+  /* Zapasowo: jeśli strona jest wyświetlana jako artefakt Claude (nie ma localStorage), spróbuj window.storage */
+  try{
+    if(window.storage){
+      const res = await window.storage.get(STORAGE_KEY, false);
+      if(res && res.value){
+        state = JSON.parse(res.value);
+        if(!state.history) state.history = JSON.parse(JSON.stringify(defaultState.history));
+        migrateAndDedupe();
+        return;
+      }
+    }
+  }catch(e){ /* brak zapisanych danych -> użyj domyślnych */ }
   state = JSON.parse(JSON.stringify(defaultState));
   migrateAndDedupe();
 }
