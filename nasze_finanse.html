@@ -187,7 +187,7 @@
   }
   .row.total .cell-name{color:var(--text-primary); font-family:'Fraunces',serif; font-size:15px;}
   .row.two-col{grid-template-columns:34px 1.8fr 1fr 28px;}
-  .row.history{grid-template-columns:34px 1.2fr 1fr 1fr 1fr 28px;}
+  .row.history{grid-template-columns:34px 1.1fr 1fr 1fr 1fr 1fr 28px;}
   .icon-badge{
     width:30px;height:30px;border-radius:8px; background:var(--gold-soft); color:var(--gold);
     display:flex;align-items:center;justify-content:center;
@@ -312,7 +312,7 @@
       gap:5px 6px; padding:10px 8px;
     }
     .row.two-col{ grid-template-columns:22px 1.5fr 0.9fr 20px; }
-    .row.history{ grid-template-columns:22px 1fr 0.85fr 0.85fr 0.85fr 20px; }
+    .row.history{ grid-template-columns:22px 0.95fr 0.85fr 0.85fr 0.85fr 0.85fr 20px; }
     .row.head{ font-size:8.5px; letter-spacing:.03em; padding-top:10px; padding-bottom:8px; }
     .row.total .cell-name{ font-size:12.5px; }
 
@@ -406,7 +406,7 @@
     </div>
     <div class="panel" style="margin-top:14px;">
       <div class="row head history">
-        <div></div><div>Data</div><div style="text-align:right">Aktywa netto</div><div style="text-align:right">Nieruchomości</div><div style="text-align:right">Majątek netto</div><div></div>
+        <div></div><div>Data</div><div style="text-align:right">Aktywa pieniężne</div><div style="text-align:right">Aktywa netto</div><div style="text-align:right">Nieruchomości</div><div style="text-align:right">Majątek netto</div><div></div>
       </div>
       <div id="historyRows"></div>
       <div style="padding:10px 18px; font-size:11.5px; color:var(--text-faint); font-family:'IBM Plex Mono',monospace; border-top:1px solid var(--hairline-soft);">
@@ -610,6 +610,21 @@ function buildFxName(currency, rate, rateDate){
   return `${currency} przeliczone na PLN (kurs NBP tabela A, śr. ${dateFmt}: ${rateFmt})`;
 }
 
+/* Wiersz walutowy ma osobną kwotę w walucie dla każdej osoby: fx.amounts = {k, m}.
+   Starszy format (fx.amount + fx.owner) jest zamieniany automatycznie. */
+function fxAmounts(fx){
+  if(!fx.amounts){
+    fx.amounts = {k:0, m:0};
+    fx.amounts[fx.owner || 'm'] = fx.amount || 0;
+  }
+  return fx.amounts;
+}
+function applyFx(row){
+  const a = fxAmounts(row.fx);
+  row.k = Math.round((a.k||0) * row.fx.rate);
+  row.m = Math.round((a.m||0) * row.fx.rate);
+}
+
 async function refreshFxRates(){
   const fxRows = state.financial.filter(it=>it.fx);
   if(!fxRows.length) return;
@@ -619,12 +634,12 @@ async function refreshFxRates(){
       const {rate, rateDate} = await fetchNbpAvgRate(row.fx.currency, state.date);
       row.fx.rate = rate;
       row.fx.rateDate = rateDate;
-      row[row.fx.owner] = Math.round(row.fx.amount * rate);
+      applyFx(row);
       row.name = buildFxName(row.fx.currency, rate, rateDate);
     }catch(e){
       console.error('Błąd pobierania kursu NBP:', e);
       anyFailed = true;
-      row[row.fx.owner] = Math.round(row.fx.amount * row.fx.rate);
+      applyFx(row);
       row.name = buildFxName(row.fx.currency, row.fx.rate, row.fx.rateDate) + ' — nie udało się odświeżyć';
     }
   }
@@ -689,9 +704,9 @@ const defaultState = {
     {name:"Konto PKO", k:2400, m:0},
     {name:"Gotówka w domu", k:0, m:9150},
     {name:"USD przeliczone na PLN (kurs NBP tabela A – pobierany automatycznie)", k:0, m:27558,
-      fx:{currency:"USD", amount:5990.87, owner:"m", rate:3.60, rateDate:"2026-07-06"}},
+      fx:{currency:"USD", amounts:{k:0, m:5990.87}, rate:3.60, rateDate:"2026-07-06"}},
     {name:"EUR przeliczone na PLN (kurs NBP tabela A – pobierany automatycznie)", k:0, m:20571.6,
-      fx:{currency:"EUR", amount:4898, owner:"m", rate:4.20, rateDate:"2026-07-06"}},
+      fx:{currency:"EUR", amounts:{k:0, m:4898}, rate:4.20, rateDate:"2026-07-06"}},
     {name:"Konto oszczędnościowe mBank (skarpeta)", k:0, m:64800},
     {name:"Konto oszczędnościowe mBank (najemcy)", k:0, m:68600},
     {name:"Obligacje ROD 6 PKO BP", k:0, m:60400},
@@ -699,8 +714,8 @@ const defaultState = {
     {name:"XTB IKE", k:0, m:46600},
   ],
   liabilities: [
-    {name:"Kredyt PEKAO – pozostały do spłaty", k:0, m:28736},
-    {name:"Kredyt PKO BP – pozostały do spłaty", k:0, m:112641}
+    {name:"Kredyt PEKAO – pozostały do spłaty", k:14368, m:14368},
+    {name:"Kredyt PKO BP – pozostały do spłaty", k:56320.5, m:56320.5}
   ],
   estate: [
     {name:"Kaczorowskiego", v:900000},
@@ -781,18 +796,37 @@ async function loadState(){
 function migrateAndDedupe(){
   state.financial.forEach(it=>{ if(it.name.trim()==='IKZE Nationale Nederlanden') it.name='IKZE'; });
   state.financial.forEach(it=>{
-    if(it.fx) return;
+    if(it.fx){
+      /* stary format: tylko jedna osoba miała kwotę w walucie, druga kolumna była w PLN.
+         Tę drugą kwotę traktujemy teraz jako kwotę w walucie (tak miała działać). */
+      if(!it.fx.amounts){
+        const owner = it.fx.owner || 'm';
+        const other = owner === 'k' ? 'm' : 'k';
+        fxAmounts(it.fx);
+        it.fx.amounts[other] = it[other] || 0;
+        delete it.fx.amount; delete it.fx.owner;
+        applyFx(it);
+      }
+      return;
+    }
     const n = it.name.toLowerCase();
     if(/usd/.test(n)){
       const owner = it.m ? 'm' : 'k';
-      it.fx = {currency:'USD', amount: Math.round((it[owner]||0)/3.60), owner, rate:3.60, rateDate: state.date};
+      it.fx = {currency:'USD', amounts:{k:0, m:0}, rate:3.60, rateDate: state.date};
+      it.fx.amounts[owner] = Math.round((it[owner]||0)/3.60);
     } else if(/eur/.test(n)){
       const owner = it.m ? 'm' : 'k';
-      it.fx = {currency:'EUR', amount: Math.round((it[owner]||0)/4.20), owner, rate:4.20, rateDate: state.date};
+      it.fx = {currency:'EUR', amounts:{k:0, m:0}, rate:4.20, rateDate: state.date};
+      it.fx.amounts[owner] = Math.round((it[owner]||0)/4.20);
     }
   });
   state.financial = dedupeByName(state.financial, false);
   state.liabilities = dedupeByName(state.liabilities, false);
+  state.liabilities.forEach(it=>{
+    const total = (it.k||0) + (it.m||0);
+    it.k = Math.round(total*100/2)/100;
+    it.m = Math.round((total - it.k)*100)/100;
+  });
   state.estate = dedupeByName(state.estate, true);
   state.expenses = dedupeByName(state.expenses, true);
 }
@@ -875,7 +909,7 @@ function updateRowAmountColors(list, containerId, isRed){
     const item = list[i];
     if(!item) return;
     const amt = (item.k||0)+(item.m||0);
-    const readonly = row.querySelector('.cell-amt.readonly');
+    const readonly = row.querySelector('.cell-amt.readonly:not(.half), .cell-amt.liab-sum');
     if(readonly) readonly.style.color = colorForRatio(Math.abs(amt)/maxVal, isRed);
   });
 }
@@ -901,28 +935,36 @@ function renderTwoOwnerSection(list, containerId, rowClass){
   list.forEach((item,idx)=>{
     const row = document.createElement('div');
     row.className = 'row' + (rowClass?(' '+rowClass):'');
-    const isFxK = item.fx && item.fx.owner === 'k';
-    const isFxM = item.fx && item.fx.owner === 'm';
+    const isFxK = !!item.fx;
+    const isFxM = !!item.fx;
+    const fxA = item.fx ? fxAmounts(item.fx) : null;
     const fxTitle = item.fx ? ` title="Kwota w walucie ${item.fx.currency} — przelicza się sama po kursie NBP tabela A"` : '';
-    const kCell = isFxK
-      ? `<input class="cell-amt fx-input" type="text" inputmode="decimal" value="${formatNumberInput(item.fx.amount)}" data-idx="${idx}" data-field="k"${fxTitle}>`
+    const isLiab = rowClass === 'liab';
+    const kCell = isLiab
+      ? `<div class="cell-amt readonly half" data-role="k">${fmt(item.k||0)}</div>`
+      : isFxK
+      ? `<input class="cell-amt fx-input" type="text" inputmode="decimal" value="${formatNumberInput(fxA.k)}" data-idx="${idx}" data-field="k"${fxTitle}>`
       : `<input class="cell-amt" type="text" inputmode="decimal" value="${formatNumberInput(item.k)}" data-idx="${idx}" data-field="k">`;
-    const mCell = isFxM
-      ? `<input class="cell-amt fx-input" type="text" inputmode="decimal" value="${formatNumberInput(item.fx.amount)}" data-idx="${idx}" data-field="m"${fxTitle}>`
+    const mCell = isLiab
+      ? `<div class="cell-amt readonly half" data-role="m">${fmt(item.m||0)}</div>`
+      : isFxM
+      ? `<input class="cell-amt fx-input" type="text" inputmode="decimal" value="${formatNumberInput(fxA.m)}" data-idx="${idx}" data-field="m"${fxTitle}>`
       : `<input class="cell-amt" type="text" inputmode="decimal" value="${formatNumberInput(item.m)}" data-idx="${idx}" data-field="m">`;
     row.innerHTML = `
       <div class="icon-badge">${iconSvg(item.name)}</div>
       <input class="cell-name" value="${escapeHtml(item.name)}" data-idx="${idx}" data-field="name"${item.fx?' title="Nazwa i kurs aktualizują się automatycznie po odświeżeniu kursów NBP"':''}>
       ${kCell}
       ${mCell}
-      <div class="cell-amt readonly">${fmt(item.k+item.m)}</div>
+      ${isLiab
+        ? `<input class="cell-amt liab-sum" type="text" inputmode="decimal" value="${formatNumberInput((item.k||0)+(item.m||0))}" data-idx="${idx}" title="Wpisz całą kwotę kredytu — dzieli się po połowie">`
+        : `<div class="cell-amt readonly">${fmt(item.k+item.m)}</div>`}
       <button class="del-btn" data-idx="${idx}" title="Usuń">✕</button>
     `;
     el.appendChild(row);
   });
   updateRowAmountColors(list, containerId, rowClass==='liab');
   el.querySelectorAll('.cell-amt[type=text]').forEach(wireAmountFormatting);
-  el.querySelectorAll('.cell-name, .cell-amt[type=text]:not(.fx-input)').forEach(inp=>{
+  el.querySelectorAll('.cell-name, .cell-amt[type=text]:not(.fx-input):not(.liab-sum)').forEach(inp=>{
     inp.addEventListener('input', ()=>{
       const i = +inp.dataset.idx, f = inp.dataset.field;
       list[i][f] = (f==='name') ? inp.value : parseLocaleNumber(inp.value);
@@ -936,12 +978,25 @@ function renderTwoOwnerSection(list, containerId, rowClass){
       recalcAll(); scheduleSave();
     });
   });
+  el.querySelectorAll('.liab-sum').forEach(inp=>{
+    inp.addEventListener('input', ()=>{
+      const item = list[+inp.dataset.idx];
+      const total = parseLocaleNumber(inp.value);
+      item.k = Math.round(total*100/2)/100;
+      item.m = Math.round((total - item.k)*100)/100;
+      const r = inp.closest('.row');
+      r.querySelector('[data-role=k]').textContent = fmt(item.k);
+      r.querySelector('[data-role=m]').textContent = fmt(item.m);
+      updateRowAmountColors(list, containerId, true);
+      recalcAll(); scheduleSave();
+    });
+  });
   el.querySelectorAll('.fx-input').forEach(inp=>{
     inp.addEventListener('input', ()=>{
       const i = +inp.dataset.idx;
       const item = list[i];
-      item.fx.amount = parseLocaleNumber(inp.value);
-      item[item.fx.owner] = Math.round(item.fx.amount * item.fx.rate);
+      fxAmounts(item.fx)[inp.dataset.field] = parseLocaleNumber(inp.value);
+      applyFx(item);
       inp.closest('.row').querySelector('.cell-amt.readonly').textContent = fmt(item.k+item.m);
       updateRowAmountColors(list, containerId, rowClass==='liab');
       recalcAll(); scheduleSave();
@@ -1042,6 +1097,7 @@ function renderHistoryRows(){
     row.innerHTML = `
       <div class="icon-badge"><svg viewBox="0 0 16 16" fill="none">${ICONS.invest}</svg></div>
       <input class="cell-name" type="date" value="${item.date}" data-idx="${idx}" data-field="date" style="font-family:'IBM Plex Mono',monospace;">
+      <input class="cell-amt" type="text" inputmode="decimal" value="${formatNumberInput(item.finGross||0)}" data-idx="${idx}" data-field="finGross" title="Aktywa finansowe brutto (przed odjęciem kredytów)">
       <input class="cell-amt" type="text" inputmode="decimal" value="${formatNumberInput(item.finNet)}" data-idx="${idx}" data-field="finNet">
       <input class="cell-amt" type="text" inputmode="decimal" value="${formatNumberInput(item.estate)}" data-idx="${idx}" data-field="estate">
       <div class="cell-amt readonly" data-role="netWorth">${fmt(item.finNet + item.estate)}</div>
@@ -1123,16 +1179,16 @@ function drawHistoryChart(){
   const W = 680, H = 240, padL = 56, padR = 20, padT = 20, padB = 32;
   const plotW = W - padL - padR, plotH = H - padT - padB;
 
-  const points = state.history.map(h=>({date:h.date, val:h.netWorth, live:false}))
+  const points = state.history.map(h=>({date:h.date, val:h.netWorth, gross:(h.finGross||0), live:false}))
     .sort((a,b)=>a.date.localeCompare(b.date));
   const hasLive = !points.length || points[points.length-1].date !== state.date || points[points.length-1].val !== lastTotals.netWorth;
-  const allPoints = hasLive ? [...points, {date: state.date, val: lastTotals.netWorth, live:true}].sort((a,b)=>a.date.localeCompare(b.date)) : points;
+  const allPoints = hasLive ? [...points, {date: state.date, val: lastTotals.netWorth, gross: lastTotals.finGross, live:true}].sort((a,b)=>a.date.localeCompare(b.date)) : points;
 
   if(allPoints.length < 1){ svg.innerHTML=''; return; }
 
   const dateToTime = d => new Date(d+'T00:00:00').getTime();
   const times = allPoints.map(p=>dateToTime(p.date));
-  const vals = allPoints.map(p=>p.val);
+  const vals = [...allPoints.map(p=>p.val), ...allPoints.map(p=>p.gross)];
   const tMin = Math.min(...times), tMax = Math.max(...times);
   const vMin = Math.min(...vals), vMax = Math.max(...vals);
   const vPad = (vMax-vMin)*0.15 || Math.max(vMax*0.05,1000);
@@ -1151,6 +1207,7 @@ function drawHistoryChart(){
   }
 
   const linePts = allPoints.map(p=>`${x(dateToTime(p.date))},${y(p.val)}`).join(' ');
+  const grossPts = allPoints.map(p=>`${x(dateToTime(p.date))},${y(p.gross)}`).join(' ');
   const areaPts = `${padL},${padT+plotH} ${linePts} ${x(dateToTime(allPoints[allPoints.length-1].date))},${padT+plotH}`;
 
   let dots = '';
@@ -1159,6 +1216,10 @@ function drawHistoryChart(){
     const label = new Date(p.date+'T00:00:00').toLocaleDateString('pl-PL',{day:'2-digit',month:'2-digit',year:'2-digit'});
     dots += `<circle cx="${cx}" cy="${cy}" r="${p.live?5:4}" fill="${p.live?'var(--bg-panel)':'var(--gold)'}" stroke="var(--gold)" stroke-width="2" ${p.live?'stroke-dasharray="2 2"':''}>
       <title>${label} — ${fmt(p.val)}${p.live?' (dziś, na żywo)':''}</title>
+    </circle>`;
+    const gy = y(p.gross);
+    dots += `<circle cx="${cx}" cy="${gy}" r="${p.live?4.5:3.5}" fill="${p.live?'var(--bg-panel)':'var(--emerald)'}" stroke="var(--emerald)" stroke-width="2" ${p.live?'stroke-dasharray="2 2"':''}>
+      <title>${label} — aktywa pieniężne: ${fmt(p.gross)}${p.live?' (dziś, na żywo)':''}</title>
     </circle>`;
     dots += `<text x="${cx}" y="${H-8}" text-anchor="middle" font-family="IBM Plex Mono" font-size="9" fill="var(--text-faint)">${label}</text>`;
   });
@@ -1173,7 +1234,14 @@ function drawHistoryChart(){
     ${gridLines}
     <polygon points="${areaPts}" fill="url(#areaGrad)"/>
     <polyline points="${linePts}" fill="none" stroke="var(--gold)" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>
+    <polyline points="${grossPts}" fill="none" stroke="var(--emerald)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
     ${dots}
+    <g font-family="IBM Plex Mono" font-size="10" fill="var(--text-muted)">
+      <line x1="${padL+4}" y1="6" x2="${padL+20}" y2="6" stroke="var(--gold)" stroke-width="2.2"/>
+      <text x="${padL+26}" y="9">Majątek netto</text>
+      <line x1="${padL+130}" y1="6" x2="${padL+146}" y2="6" stroke="var(--emerald)" stroke-width="2"/>
+      <text x="${padL+152}" y="9">Aktywa pieniężne</text>
+    </g>
   `;
 }
 
